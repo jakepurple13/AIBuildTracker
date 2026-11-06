@@ -39,6 +39,8 @@ h2 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spa
 .current .row { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap;
   font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; margin: 8px 0 6px; }
 .current .row b { color: var(--text); }
+.task + .task { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.id { color: var(--muted); font-weight: 400; }
 .note { margin-top: 8px; font-size: 13px; color: var(--muted); font-style: italic; }
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 td { padding: 8px 6px; border-top: 1px solid var(--line); vertical-align: top; }
@@ -71,7 +73,7 @@ td.r { text-align: right; white-space: nowrap; }
   <div class="bar ok"><div id="overallBar" style="width:0"></div></div>
 
   <section class="current">
-    <h2>Current task</h2>
+    <h2 id="runHead">Current task</h2>
     <div id="current"></div>
   </section>
 
@@ -121,34 +123,55 @@ function model(s, now) {
   return { done, actual, estFor, basis, factor };
 }
 
+function runningCard(s, m, t, now) {
+  const el = now - t.started_at, est = m.estFor(t);
+  const over = est != null && el > est;
+  const pct = est ? Math.min(el / est * 100, over ? 100 : 97) : 0;
+  const note = t.live_note ?? (s.current_note && !s.tasks.some(x => x.live_note) ? s.current_note : null);
+  return `<div class="task">
+    <div class="name"><span class="id">#${s.tasks.indexOf(t) + 1}</span> ${esc(t.name)}</div>
+    <div class="row">
+      <span>Running <b>${dur(el)}</b> · started ${clock(t.started_at)}</span>
+      <span>${est == null ? "Estimate after first task" :
+        over ? `<b style="color:var(--bad)">Over by ${dur(el - est)}</b> (est ${dur(est)})`
+             : `Est. <b>${dur(est - el)}</b> left of ${dur(est)} · done ~${clock(now + est - el)}`}</span>
+    </div>
+    <div class="bar ${over ? "over" : ""}"><div style="width:${pct}%"></div></div>
+    ${note ? `<div class="note">${esc(note)}</div>` : ""}</div>`;
+}
+
+// Projects start/finish times by giving pending tasks, in order, to whichever of `workers`
+// lanes frees up first. Running tasks occupy their lanes until their estimated end.
+function schedule(m, running, todo, workers, now) {
+  const lanes = running.map(t => { const e = m.estFor(t); return e == null ? null : now + Math.max(e - (now - t.started_at), 0); });
+  while (lanes.length < workers) lanes.push(now);
+  const starts = new Map();
+  let unknown = lanes.includes(null);
+  for (const t of todo) {
+    const est = m.estFor(t);
+    if (unknown || est == null) { unknown = true; starts.set(t, null); continue; }
+    let i = 0; lanes.forEach((v, j) => { if (v < lanes[i]) i = j; });
+    starts.set(t, lanes[i]); lanes[i] += est;
+  }
+  return { starts, end: unknown ? null : Math.max(now, ...lanes) };
+}
+
 function render() {
   if (!state) return;
   const s = state, now = Date.now() / 1000, m = model(s, now);
   const tasks = s.tasks, total = tasks.filter(t => t.status !== "skipped").length;
-  const cur = tasks.find(t => t.status === "running");
+  const running = tasks.filter(t => t.status === "running");
   const todo = tasks.filter(t => t.status === "pending");
   const finished = !!s.finished_at;
+  const workers = Math.max(s.workers || 1, running.length, 1);
 
   $("title").textContent = s.title;
   document.title = `${s.title} · Build Tracker`;
 
-  // Current task
-  let curRemain = 0;
-  if (cur) {
-    const el = now - cur.started_at, est = m.estFor(cur);
-    curRemain = est != null ? Math.max(est - el, 0) : null;
-    const over = est != null && el > est;
-    const pct = est ? Math.min(el / est * 100, over ? 100 : 97) : 0;
-    $("current").innerHTML = `
-      <div class="name">${esc(cur.name)}</div>
-      <div class="row">
-        <span>Running <b>${dur(el)}</b> · started ${clock(cur.started_at)}</span>
-        <span>${est == null ? "Estimate after first task" :
-          over ? `<b style="color:var(--bad)">Over by ${dur(el - est)}</b> (est ${dur(est)})`
-               : `Est. <b>${dur(est - el)}</b> left of ${dur(est)} · done ~${clock(now + est - el)}`}</span>
-      </div>
-      <div class="bar ${over ? "over" : ""}"><div style="width:${pct}%"></div></div>
-      ${s.current_note ? `<div class="note">${esc(s.current_note)}</div>` : ""}`;
+  // Running tasks
+  $("runHead").textContent = running.length > 1 ? `Running (${running.length})` : "Current task";
+  if (running.length) {
+    $("current").innerHTML = running.map(t => runningCard(s, m, t, now)).join("");
   } else {
     $("current").innerHTML = finished
       ? `<div class="done-banner">Build finished at ${clock(s.finished_at)}</div>`
@@ -156,14 +179,12 @@ function render() {
   }
 
   // To do, with projected start times
-  let cursor = now + (curRemain ?? 0), unknown = curRemain == null;
+  const plan = schedule(m, running, todo, workers, now);
   $("todoCount").textContent = todo.length ? `(${todo.length})` : "";
   $("todo").innerHTML = todo.length ? todo.map(t => {
-    const id = tasks.indexOf(t) + 1, est = m.estFor(t);
-    const startAt = unknown ? null : cursor;
-    if (est == null) unknown = true; else cursor += est;
+    const id = tasks.indexOf(t) + 1, est = m.estFor(t), startAt = plan.starts.get(t);
     return `<tr><td class="n">${id}</td><td>${esc(t.name)}
-      ${startAt ? `<div class="sub">starts ~${clock(startAt)}</div>` : ""}</td>
+      ${startAt ? `<div class="sub">starts ~${startAt - now < 30 ? "now" : clock(startAt)}</div>` : ""}</td>
       <td class="r">${est == null ? "–" : "~" + dur(est)}</td></tr>`;
   }).join("") : `<tr><td class="empty">Nothing queued</td></tr>`;
 
@@ -184,17 +205,17 @@ function render() {
   }).join("") : `<tr><td class="empty">Nothing finished yet</td></tr>`;
 
   // Totals
-  const remaining = finished ? 0 : (unknown ? null : cursor - now);
-  const curFrac = cur && curRemain != null && m.estFor(cur) ? Math.min((now - cur.started_at) / m.estFor(cur), 0.97) : 0;
-  const pct = total ? (m.done.length + curFrac) / total * 100 : 0;
+  const remaining = finished ? 0 : (plan.end == null ? null : plan.end - now);
+  const runFrac = running.reduce((a, t) => { const e = m.estFor(t); return a + (e ? Math.min((now - t.started_at) / e, 0.97) : 0); }, 0);
+  const pct = total ? (m.done.length + runFrac) / total * 100 : 0;
   $("pct").textContent = finished && !todo.length ? "100%" : `${Math.floor(pct)}%`;
-  $("counts").textContent = `${m.done.length} done · ${cur ? 1 : 0} running · ${todo.length} to do`;
+  $("counts").textContent = `${m.done.length} done · ${running.length} running · ${todo.length} to do`;
   $("overallBar").style.width = `${finished && !todo.length ? 100 : pct}%`;
   const firstStart = Math.min(...tasks.filter(t => t.started_at).map(t => t.started_at), s.created_at);
   $("elapsed").textContent = dur((s.finished_at || now) - firstStart);
   $("startedAt").textContent = `since ${clock(firstStart)}`;
   $("remaining").textContent = remaining == null ? "–" : dur(remaining);
-  $("basis").textContent = finished ? "finished" : m.basis;
+  $("basis").textContent = finished ? "finished" : m.basis + (workers > 1 ? ` · ${workers} parallel` : "");
   $("eta").textContent = finished ? clock(s.finished_at) : remaining == null ? "–" : clock(now + remaining);
   $("etaDay").textContent = finished ? "completed" : remaining == null ? "after first task"
     : new Date((now + remaining) * 1000).toDateString() === new Date().toDateString() ? "today" : "tomorrow or later";

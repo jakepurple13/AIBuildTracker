@@ -8,7 +8,7 @@ browser, and keeps it current as it goes.
 
 The page shows:
 
-- **Current task**: how long it has been running, the estimated time left, and when it should finish. It turns red when the task runs over its estimate.
+- **Running tasks** (one or several in parallel): how long each has been running, the estimated time left, and when it should finish. It turns red when the task runs over its estimate.
 - **To do**: each remaining task with its estimated duration and projected start time.
 - **Done**: how long each task took, its start and end times, and Claude's original estimate.
 - **Totals**: progress, time elapsed, time remaining, and an overall ETA.
@@ -64,6 +64,10 @@ $T note "running tests"
 $T add "Write docs" --est 5
 $T skip 4 --note "not needed"
 $T finish
+$T start 3 4 5      # run several tasks in parallel
+$T done 4 --note ok # finish one of them; name the task while several are running
+$T note "building" --task 3
+$T workers 3        # how many tasks run at once, for the ETA
 $T status           # text summary
 $T url              # print the page URL; restarts the server if it stopped
 ```
@@ -74,7 +78,10 @@ All commands take `--dir DIR`. By default, state lives in `~/.build-tracker/<cur
 
 - Tasks with an estimate are scaled by how actual time has compared with the estimates so far. The page shows this as the "pace" factor, limited to between 0.5× and 3×.
 - Tasks without an estimate use the average time of the finished tasks.
-- The current task's time left is its estimate minus the time it has run so far.
+- A running task's time left is its estimate minus the time it has run so far.
+- Parallel work: remaining tasks are assigned, in order, to whichever parallel slot frees up first. The number of slots is the most tasks seen running at once, or the value set with `workers N`. The ETA is when the last slot finishes.
+
+Updates hold a file lock, so parallel subagents can update the tracker at the same time (macOS and Linux).
 
 ## How it works
 

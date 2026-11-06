@@ -26,6 +26,15 @@ written here as `$T`, e.g. `<base dir>/tracker.py next`. It needs `python3`. Run
 - Status line under the current task when a step is long: `$T note "running gradle tests"`.
 - New work discovered: `$T add "Task" --est 5`. Dropped work: `$T skip <id> --note "why"`.
 - Update the tracker at each task boundary, before moving on - a stale page is worse than none.
+
+## Parallel work
+
+When tasks run at the same time (parallel subagents, concurrent builds), track each one separately:
+`$T start 3 4 5` starts several tasks at once, without stopping any task already running.
+Finish each as it completes with `$T done 4 --note "..."`, and pass `--task <id>` to `note`.
+While more than one task is running, `done`, `next` and `note` must name the task.
+Subagents may call `$T` themselves; updates are locked.
+The ETA assumes as many tasks run at once as the most seen so far; `$T workers N` sets it directly.
 - All done: `$T finish`.
 
 Lost the URL or the page says "offline": `$T url` restarts the server if needed.
