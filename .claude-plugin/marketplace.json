@@ -1,0 +1,14 @@
+{
+  "name": "aibuildtracker",
+  "owner": { "name": "jakepurple13" },
+  "metadata": {
+    "description": "Build tracker skill for Claude Code"
+  },
+  "plugins": [
+    {
+      "name": "build-tracker",
+      "source": "./",
+      "description": "Live HTML progress page for Claude's multi-step work: current task, done tasks with durations, to-do estimates, and an ETA, updating in real time."
+    }
+  ]
+}

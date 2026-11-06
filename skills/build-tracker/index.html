@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Build Tracker</title>
+<style>
+:root {
+  --bg: #15171a; --panel: #1e2125; --line: #2c3036; --text: #ecebe8; --muted: #9a9ea6;
+  --accent: #f28c38; --ok: #4fbf7f; --warn: #e5b847; --bad: #e5604f; --track: #2a2e34;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f6f5f2; --panel: #ffffff; --line: #e3e1dc; --text: #1d1f22; --muted: #6b6f76;
+    --accent: #d9711c; --ok: #2f9a5c; --warn: #b8891a; --bad: #c4432f; --track: #ebe9e4;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 920px; margin: 0 auto; padding: 24px 16px 48px; }
+header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+h1 { font-size: 22px; margin: 0; }
+.live { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+.dot.stale { background: var(--bad); }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 18px 0; }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.stat .k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.stat .v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.stat .s { font-size: 12px; color: var(--muted); }
+.bar { height: 10px; background: var(--track); border-radius: 6px; overflow: hidden; }
+.bar > div { height: 100%; background: var(--accent); transition: width .6s ease; }
+.bar.ok > div { background: var(--ok); }
+.bar.over > div { background: var(--bad); }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-top: 14px; }
+h2 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin: 0 0 10px; }
+.current .name { font-size: 18px; font-weight: 600; }
+.current .row { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; margin: 8px 0 6px; }
+.current .row b { color: var(--text); }
+.note { margin-top: 8px; font-size: 13px; color: var(--muted); font-style: italic; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+td { padding: 8px 6px; border-top: 1px solid var(--line); vertical-align: top; }
+tr:first-child td { border-top: 0; }
+td.n { color: var(--muted); width: 2.2em; }
+td.r { text-align: right; white-space: nowrap; }
+.sub { font-size: 12px; color: var(--muted); }
+.tag { font-size: 11px; padding: 1px 6px; border-radius: 4px; margin-left: 6px; }
+.tag.fast { background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); }
+.tag.slow { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
+.tag.skip { background: var(--track); color: var(--muted); }
+.empty { color: var(--muted); font-size: 13px; }
+.done-banner { color: var(--ok); font-weight: 600; }
+@media (max-width: 520px) { .stat .v { font-size: 18px; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1 id="title">Build Tracker</h1>
+    <div class="live"><span class="dot" id="dot"></span><span id="liveText">connecting…</span></div>
+  </header>
+
+  <div class="stats">
+    <div class="stat"><div class="k">Progress</div><div class="v" id="pct">–</div><div class="s" id="counts"></div></div>
+    <div class="stat"><div class="k">Elapsed</div><div class="v" id="elapsed">–</div><div class="s" id="startedAt"></div></div>
+    <div class="stat"><div class="k">Remaining</div><div class="v" id="remaining">–</div><div class="s" id="basis"></div></div>
+    <div class="stat"><div class="k">ETA</div><div class="v" id="eta">–</div><div class="s" id="etaDay"></div></div>
+  </div>
+  <div class="bar ok"><div id="overallBar" style="width:0"></div></div>
+
+  <section class="current">
+    <h2>Current task</h2>
+    <div id="current"></div>
+  </section>
+
+  <section>
+    <h2>To do <span id="todoCount"></span></h2>
+    <table id="todo"></table>
+  </section>
+
+  <section>
+    <h2>Done <span id="doneCount"></span></h2>
+    <table id="done"></table>
+  </section>
+</main>
+
+<script>
+let state = null, lastOk = 0;
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function dur(sec) {
+  if (sec == null || !isFinite(sec)) return "–";
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  if (h) return `${h}h ${String(m).padStart(2, "0")}m`;
+  if (m) return `${m}m ${String(s).padStart(2, "0")}s`;
+  return `${s}s`;
+}
+const clock = t => new Date(t * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+// Estimation: tasks with a Claude-given estimate are scaled by how actual/estimate has gone so far;
+// tasks without one use the average actual duration of finished tasks.
+function model(s, now) {
+  const done = s.tasks.filter(t => t.status === "done");
+  const actual = t => t.ended_at - t.started_at;
+  const withEst = done.filter(t => t.est_min);
+  const estSum = withEst.reduce((a, t) => a + t.est_min * 60, 0);
+  // Clamp so one unusually fast/slow task can't swing every estimate wildly.
+  const raw = estSum ? withEst.reduce((a, t) => a + actual(t), 0) / estSum : 1;
+  const factor = Math.min(Math.max(raw, 0.5), 3);
+  const avg = done.length ? done.reduce((a, t) => a + actual(t), 0) / done.length : null;
+  const anyEst = s.tasks.find(t => t.est_min);
+  const fallback = avg ?? (anyEst ? anyEst.est_min * 60 * factor : null);
+  const estFor = t => t.est_min ? t.est_min * 60 * factor : fallback;
+  let basis = done.length ? `${done.length} finished task${done.length > 1 ? "s" : ""}` : "no data yet";
+  if (withEst.length) basis += ` · pace ×${factor.toFixed(2)}`;
+  return { done, actual, estFor, basis, factor };
+}
+
+function render() {
+  if (!state) return;
+  const s = state, now = Date.now() / 1000, m = model(s, now);
+  const tasks = s.tasks, total = tasks.filter(t => t.status !== "skipped").length;
+  const cur = tasks.find(t => t.status === "running");
+  const todo = tasks.filter(t => t.status === "pending");
+  const finished = !!s.finished_at;
+
+  $("title").textContent = s.title;
+  document.title = `${s.title} · Build Tracker`;
+
+  // Current task
+  let curRemain = 0;
+  if (cur) {
+    const el = now - cur.started_at, est = m.estFor(cur);
+    curRemain = est != null ? Math.max(est - el, 0) : null;
+    const over = est != null && el > est;
+    const pct = est ? Math.min(el / est * 100, over ? 100 : 97) : 0;
+    $("current").innerHTML = `
+      <div class="name">${esc(cur.name)}</div>
+      <div class="row">
+        <span>Running <b>${dur(el)}</b> · started ${clock(cur.started_at)}</span>
+        <span>${est == null ? "Estimate after first task" :
+          over ? `<b style="color:var(--bad)">Over by ${dur(el - est)}</b> (est ${dur(est)})`
+               : `Est. <b>${dur(est - el)}</b> left of ${dur(est)} · done ~${clock(now + est - el)}`}</span>
+      </div>
+      <div class="bar ${over ? "over" : ""}"><div style="width:${pct}%"></div></div>
+      ${s.current_note ? `<div class="note">${esc(s.current_note)}</div>` : ""}`;
+  } else {
+    $("current").innerHTML = finished
+      ? `<div class="done-banner">Build finished at ${clock(s.finished_at)}</div>`
+      : `<div class="empty">${todo.length ? "Waiting to start the next task" : "No tasks running"}</div>`;
+  }
+
+  // To do, with projected start times
+  let cursor = now + (curRemain ?? 0), unknown = curRemain == null;
+  $("todoCount").textContent = todo.length ? `(${todo.length})` : "";
+  $("todo").innerHTML = todo.length ? todo.map(t => {
+    const id = tasks.indexOf(t) + 1, est = m.estFor(t);
+    const startAt = unknown ? null : cursor;
+    if (est == null) unknown = true; else cursor += est;
+    return `<tr><td class="n">${id}</td><td>${esc(t.name)}
+      ${startAt ? `<div class="sub">starts ~${clock(startAt)}</div>` : ""}</td>
+      <td class="r">${est == null ? "–" : "~" + dur(est)}</td></tr>`;
+  }).join("") : `<tr><td class="empty">Nothing queued</td></tr>`;
+
+  // Done (most recent first), plus skipped
+  const closed = tasks.filter(t => t.status === "done" || t.status === "skipped")
+    .sort((a, b) => (b.ended_at || 0) - (a.ended_at || 0));
+  $("doneCount").textContent = m.done.length ? `(${m.done.length})` : "";
+  $("done").innerHTML = closed.length ? closed.map(t => {
+    const id = tasks.indexOf(t) + 1;
+    if (t.status === "skipped")
+      return `<tr><td class="n">${id}</td><td>${esc(t.name)}<span class="tag skip">skipped</span>
+        ${t.note ? `<div class="sub">${esc(t.note)}</div>` : ""}</td><td class="r">–</td></tr>`;
+    const a = m.actual(t), e = t.est_min ? t.est_min * 60 : null;
+    const tag = e ? (a <= e ? `<span class="tag fast">est ${dur(e)}</span>` : `<span class="tag slow">est ${dur(e)}</span>`) : "";
+    return `<tr><td class="n">${id}</td><td>${esc(t.name)}${tag}
+      <div class="sub">${clock(t.started_at)}–${clock(t.ended_at)}${t.note ? " · " + esc(t.note) : ""}</div></td>
+      <td class="r">${dur(a)}</td></tr>`;
+  }).join("") : `<tr><td class="empty">Nothing finished yet</td></tr>`;
+
+  // Totals
+  const remaining = finished ? 0 : (unknown ? null : cursor - now);
+  const curFrac = cur && curRemain != null && m.estFor(cur) ? Math.min((now - cur.started_at) / m.estFor(cur), 0.97) : 0;
+  const pct = total ? (m.done.length + curFrac) / total * 100 : 0;
+  $("pct").textContent = finished && !todo.length ? "100%" : `${Math.floor(pct)}%`;
+  $("counts").textContent = `${m.done.length} done · ${cur ? 1 : 0} running · ${todo.length} to do`;
+  $("overallBar").style.width = `${finished && !todo.length ? 100 : pct}%`;
+  const firstStart = Math.min(...tasks.filter(t => t.started_at).map(t => t.started_at), s.created_at);
+  $("elapsed").textContent = dur((s.finished_at || now) - firstStart);
+  $("startedAt").textContent = `since ${clock(firstStart)}`;
+  $("remaining").textContent = remaining == null ? "–" : dur(remaining);
+  $("basis").textContent = finished ? "finished" : m.basis;
+  $("eta").textContent = finished ? clock(s.finished_at) : remaining == null ? "–" : clock(now + remaining);
+  $("etaDay").textContent = finished ? "completed" : remaining == null ? "after first task"
+    : new Date((now + remaining) * 1000).toDateString() === new Date().toDateString() ? "today" : "tomorrow or later";
+
+  const stale = Date.now() - lastOk > 6000;
+  $("dot").classList.toggle("stale", stale);
+  $("liveText").textContent = stale ? "tracker offline · showing last data" : `live · updated ${clock(s.updated_at)}`;
+}
+
+async function poll() {
+  try {
+    const r = await fetch("state.json?t=" + Date.now(), { cache: "no-store" });
+    if (r.ok) { state = await r.json(); lastOk = Date.now(); }
+  } catch (e) { /* server gone; keep last state */ }
+  render();
+}
+
+poll();
+setInterval(poll, 2000);
+setInterval(render, 1000);
+</script>
+</body>
+</html>

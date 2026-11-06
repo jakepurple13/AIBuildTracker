@@ -1,0 +1,10 @@
+{
+  "name": "build-tracker",
+  "version": "1.0.0",
+  "description": "Live HTML progress page for Claude's multi-step work: current task, done tasks with durations, to-do estimates, and an ETA, updating in real time.",
+  "author": { "name": "jakepurple13" },
+  "homepage": "https://github.com/jakepurple13/AIBuildTracker",
+  "repository": "https://github.com/jakepurple13/AIBuildTracker",
+  "license": "MIT",
+  "keywords": ["progress", "tracker", "dashboard", "eta", "skill"]
+}
